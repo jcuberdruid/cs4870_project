@@ -1,44 +1,44 @@
 import os
-import random
 import numpy as np
 import tensorflow as tf
 import scipy.io.wavfile
-from tensorflow.keras.layers import Input, Dense, LayerNormalization
-from tensorflow.keras.models import Model
-from scipy.signal import firwin, lfilter
-from tensorflow.keras.callbacks import ModelCheckpoint
+from keras.layers import Input, Dense, LayerNormalization
+from keras.models import Model
+from keras.callbacks import ModelCheckpoint
 import csv
+import glob
 
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
-new_path = "../data/channels_1_2"
+new_path = "../../data/8khz_wav/"
 
-def lowpass_filter(data, cutoff_freq, fs=44100, numtaps=101):
-    coeffs = firwin(numtaps, cutoff_freq, fs=fs, pass_zero='lowpass')
-    filtered_data = lfilter(coeffs, 1.0, data)
-    return filtered_data
-
-def downsample_1d(data, factor):
-    return np.mean(data.reshape(-1, factor), axis=1)
-
-# Get all .wav files in the directory
-all_files = [f for f in os.listdir(new_path) if f.endswith('.wav')]
+all_files = glob.glob(os.path.join(new_path, '**/*.wav'), recursive=True)
 if len(all_files) < 10:
     raise ValueError("Not enough .wav files in the directory.")
 
-# Randomly select 10 files
-selected_files = random.sample(all_files, 10)
+percentage = .1
+num_files_to_use = int(len(all_files) * percentage)
+selected_files = all_files[:num_files_to_use]  # Selects the first 'num_files_to_use' files
 
-# Process and concatenate data from the selected files
 combined_data = []
-for file in selected_files:
-    rate, data = scipy.io.wavfile.read(os.path.join(new_path, file))
-    data = lowpass_filter(data, cutoff_freq=500, fs=rate)
-    data = downsample_1d(data, 2)
+'''
+for idx, file in enumerate(selected_files):
+    rate, data = scipy.io.wavfile.read(file)  # 'file' contains the full path
     combined_data.append(data)
+    print(f"Loading progress: {((idx + 1) / num_files_to_use) * 100:.2f}%", end='\r')
+'''
+for idx, file in enumerate(selected_files):
+    rate, data = scipy.io.wavfile.read(file)  # 'file' contains the full path
+    
+    # Normalize the audio data to [-1, 1] by dividing by the max int16 value
+    data = data / np.iinfo(np.int16).max
+    
+    combined_data.append(data)
+    print(f"Loading progress: {((idx + 1) / num_files_to_use) * 100:.2f}%", end='\r')
 
-# Concatenate the data to form the final dataset
+
 data = np.concatenate(combined_data)
+print("\nFinished loading data.")  # New line after progress is complete
 
 def create_dataset_gen(data, input_window_size=50, output_window_size=10):
     for i in range(0, len(data) - input_window_size - output_window_size + 1, output_window_size):
@@ -46,7 +46,7 @@ def create_dataset_gen(data, input_window_size=50, output_window_size=10):
         Y = data[i+input_window_size:i+input_window_size+output_window_size]
         yield np.array(X, dtype=np.float16).reshape(input_window_size, 1), np.array(Y, dtype=np.float16)
 
-input_window_size = 15000
+input_window_size = 1500
 output_window_size = 3000
 
 dataset = tf.data.Dataset.from_generator(
@@ -109,27 +109,4 @@ model.compile(loss="mse", optimizer="adam")
 
 save_epoch_loss_cb = SaveEpochLossCallback('epoch_loss.csv')
 history = model.fit(train_dataset, validation_data=test_dataset, epochs=10, callbacks=[save_epoch_loss_cb, model_checkpoint_cb])
-
-
-exit(0)
-reconstructed_audio = np.zeros(len(data))
-counts = np.zeros(len(data))
-
-for i in range(len(data) - input_window_size - output_window_size + 1):
-    input_sequence = data[i:i+input_window_size]
-    predicted_sequence = model.predict(input_sequence.reshape(1, input_window_size, 1))
-    start_idx = i + input_window_size
-    end_idx = start_idx + output_window_size
-    reconstructed_audio[start_idx:end_idx] += predicted_sequence[0]
-    counts[start_idx:end_idx] += 1
-
-reconstructed_audio = reconstructed_audio / np.maximum(counts, 1)  # Avoid division by zero
-predicted_sound = np.int16(reconstructed_audio/np.max(np.abs(reconstructed_audio)) * 32767)
-scipy.io.wavfile.write('predicted_output_3090.wav', rate//2, predicted_sound)
-
-with open('history.csv', 'w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerow(["Epoch", "Training Loss", "Validation Loss"])
-    for epoch, train_loss, val_loss in zip(range(len(history.history['loss'])), history.history['loss'], history.history['val_loss']):
-        writer.writerow([epoch, train_loss, val_loss])
 

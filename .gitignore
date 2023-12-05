@@ -6,3 +6,4 @@ predicted_sound.npy
 test_model_update.py
 wavelengths-haha.txt
 oldPython/prediction/
+*.h5

@@ -1,45 +1,54 @@
+import os
 import numpy as np
 import tensorflow as tf
 import scipy.io.wavfile
 from tensorflow.keras.layers import Input, Dense, LayerNormalization
 from tensorflow.keras.models import Model
-from scipy.signal import firwin, lfilter
 from tensorflow.keras.callbacks import ModelCheckpoint
 import csv
+import glob
 
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
-test_path = "../data/A3CarScene_AudioData/audio-ch2-20221017-2.wav"
+new_path = "data/"
 
-def lowpass_filter(data, cutoff_freq, fs=44100, numtaps=101):
-    coeffs = firwin(numtaps, cutoff_freq, fs=fs, pass_zero='lowpass')
-    filtered_data = lfilter(coeffs, 1.0, data)
-    return filtered_data
+# Get all .wav files in the directory recursively
+all_files = glob.glob(os.path.join(new_path, '**/*.wav'), recursive=True)
+if len(all_files) < 10:
+    raise ValueError("Not enough .wav files in the directory.")
 
-def downsample_1d(data, factor):
-    return np.mean(data.reshape(-1, factor), axis=1)
+# Use a percentage of files (e.g., 20%)
+percentage = 0.01
+num_files_to_use = int(len(all_files) * percentage)
+selected_files = all_files[:num_files_to_use]  # Selects the first 'num_files_to_use' files
 
-rate, data = scipy.io.wavfile.read(test_path)
-data = lowpass_filter(data, cutoff_freq=500, fs=rate)
-data = downsample_1d(data, 2)
+def create_dataset_gen(selected_files, input_window_size=50, output_window_size=10):
+    for idx, file_path in enumerate(selected_files):
+        rate, data = scipy.io.wavfile.read(file_path)  # Read each file individually
+        data = data.astype(np.float32)  # Ensure consistent datatype
 
-def create_dataset_gen(data, input_window_size=50, output_window_size=10):
-    for i in range(0, len(data) - input_window_size - output_window_size + 1, output_window_size):
-        X = data[i:i+input_window_size]
-        Y = data[i+input_window_size:i+input_window_size+output_window_size]
-        yield np.array(X, dtype=np.float16).reshape(input_window_size, 1), np.array(Y, dtype=np.float16)
+        for i in range(0, len(data) - input_window_size - output_window_size + 1, output_window_size):
+            X = data[i:i+input_window_size]
+            Y = data[i+input_window_size:i+input_window_size+output_window_size]
+            yield X.reshape(input_window_size, 1), Y.reshape(output_window_size, 1)
+        
+        # Print the loading progress of files
+        print(f"Processing file {idx+1}/{len(selected_files)}: {file_path}", end='\r')
+    print("\nFinished processing files.")
 
-input_window_size = 5500
-output_window_size = 1125
+input_window_size = 15000
+output_window_size = 3000
 
 dataset = tf.data.Dataset.from_generator(
-    lambda: create_dataset_gen(data, input_window_size, output_window_size),
-    (tf.float32, tf.float32),
-    (tf.TensorShape([input_window_size, 1]), tf.TensorShape([output_window_size]))
+    lambda: create_dataset_gen(selected_files, input_window_size, output_window_size),
+    output_signature=(
+        tf.TensorSpec(shape=(input_window_size, 1), dtype=tf.float32),
+        tf.TensorSpec(shape=(output_window_size, 1), dtype=tf.float32),
+    )
 )
 
 train_size = int(1 * dataset.cardinality().numpy())
-BATCH_SIZE = 16
+BATCH_SIZE = 2
 train_dataset = dataset.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.experimental.AUTOTUNE)
 test_dataset = dataset.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.experimental.AUTOTUNE)
 
@@ -93,6 +102,8 @@ model.compile(loss="mse", optimizer="adam")
 save_epoch_loss_cb = SaveEpochLossCallback('epoch_loss.csv')
 history = model.fit(train_dataset, validation_data=test_dataset, epochs=10, callbacks=[save_epoch_loss_cb, model_checkpoint_cb])
 
+
+exit(0)
 reconstructed_audio = np.zeros(len(data))
 counts = np.zeros(len(data))
 
@@ -102,15 +113,4 @@ for i in range(len(data) - input_window_size - output_window_size + 1):
     start_idx = i + input_window_size
     end_idx = start_idx + output_window_size
     reconstructed_audio[start_idx:end_idx] += predicted_sequence[0]
-    counts[start_idx:end_idx] += 1
-
-reconstructed_audio = reconstructed_audio / np.maximum(counts, 1)  # Avoid division by zero
-predicted_sound = np.int16(reconstructed_audio/np.max(np.abs(reconstructed_audio)) * 32767)
-scipy.io.wavfile.write('predicted_output_3090.wav', rate//2, predicted_sound)
-
-with open('history.csv', 'w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerow(["Epoch", "Training Loss", "Validation Loss"])
-    for epoch, train_loss, val_loss in zip(range(len(history.history['loss'])), history.history['loss'], history.history['val_loss']):
-        writer.writerow([epoch, train_loss, val_loss])
 

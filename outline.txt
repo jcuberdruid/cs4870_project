@@ -1,0 +1,18 @@
+
+src: 
+
+class datahandler: #handles data 
+	- init(datadir) <- should default to main data dir 
+	- get file names -> returns all wav file names
+	- load files -> (#numfilestoload or all,)
+       ?- lazy loader(maybe is just a tensorflow thing)
+
+class model: # sorta an interface, could just be a function; where you define model and params to send to train
+class train: #takes a model with all params, loads data with datahandler, trains model; saves to specified dir  
+class logging: # eh maybe some sort of UID and time stamp that unifies each experiment and its results 
+
+utilities: 
+
+- make_experiment() makes experiment folder, results folder, IDs, description file in experiment: dir -> exp_name_38230412347 <-ID
+- archive(ID) (moves the experiment and results to the archive and compresses them, sorta like paranoid recycle bin) 
+- unarchive(ID) ^ puts things back

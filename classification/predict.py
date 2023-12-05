@@ -1,50 +1,72 @@
+import os
 import numpy as np
 import tensorflow as tf
 import scipy.io.wavfile
-from tensorflow.keras.layers import Input, Dense, LayerNormalization
-from tensorflow.keras.models import Model
-from scipy.signal import firwin, lfilter
-from tensorflow.keras.callbacks import ModelCheckpoint
+from keras.layers import Input, Dense, LayerNormalization
+from keras.models import Model
+from keras.callbacks import ModelCheckpoint
+import random
 import csv
+import glob
 
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
-test_path = "../data/A3CarScene_AudioData/audio-ch2-20221017-2.wav"
+new_path = "../../data/8khz_wav/"
 
-def lowpass_filter(data, cutoff_freq, fs=44100, numtaps=101):
-    coeffs = firwin(numtaps, cutoff_freq, fs=fs, pass_zero='lowpass')
-    filtered_data = lfilter(coeffs, 1.0, data)
-    return filtered_data
+# Get all .wav files in the directory recursively
+all_files = glob.glob(os.path.join(new_path, '**/*.wav'), recursive=True)
+if len(all_files) < 10:
+    raise ValueError("Not enough .wav files in the directory.")
 
-def downsample_1d(data, factor):
-    return np.mean(data.reshape(-1, factor), axis=1)
+random.shuffle(all_files)
 
-rate, data = scipy.io.wavfile.read(test_path)
-print(rate)
-data = lowpass_filter(data, cutoff_freq=500, fs=rate)
-data = downsample_1d(data, 2)
+# Use a percentage of files (e.g., 20%)
+percentage = 0.75
+num_files_to_use = int(len(all_files) * percentage)
+selected_files = all_files[:num_files_to_use]  # Selects the first 'num_files_to_use' files
+print(selected_files)
 
-def create_dataset_gen(data, input_window_size=50, output_window_size=10):
-    for i in range(len(data) - input_window_size - output_window_size + 1):
-        X = data[i:i+input_window_size]
-        Y = data[i+input_window_size:i+input_window_size+output_window_size]
-        yield np.array(X, dtype=np.float16).reshape(input_window_size, 1), np.array(Y, dtype=np.float16)
+input_window_size = 3000
+output_window_size = 500
 
-input_window_size = 5500
-output_window_size = 1125
+def create_dataset_gen(selected_files, input_window_size=5000, output_window_size=1200):
+    for idx, file_path in enumerate(selected_files):
+        rate, data = scipy.io.wavfile.read(file_path)  
+        data = data / np.iinfo(np.int16).max  
+        data = data.astype(np.float32) 
+        for i in range(0, len(data) - input_window_size - output_window_size + 1, output_window_size):
+            X = data[i:i+input_window_size]
+            Y = data[i+input_window_size:i+input_window_size+output_window_size]
+            yield X.reshape(input_window_size, 1), Y.reshape(output_window_size, 1)
+        print(f"Processing file {idx+1}/{len(selected_files)}: {file_path}", end='\r')
+    print("\nFinished processing files.")
 
+dataset = tf.data.Dataset.from_generator(
+    lambda: create_dataset_gen(selected_files, input_window_size, output_window_size),
+    output_signature=(
+        tf.TensorSpec(shape=(input_window_size, 1), dtype=tf.float32),
+        tf.TensorSpec(shape=(output_window_size, 1), dtype=tf.float32),
+    )
+)
+
+'''
+input_window_size = 15000
+output_window_size = 3000
 
 dataset = tf.data.Dataset.from_generator(
     lambda: create_dataset_gen(data, input_window_size, output_window_size),
     (tf.float32, tf.float32),
     (tf.TensorShape([input_window_size, 1]), tf.TensorShape([output_window_size]))
 )
+'''
 
 train_size = int(1 * dataset.cardinality().numpy())
-
-BATCH_SIZE = 17
+BATCH_SIZE = 56
 train_dataset = dataset.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.experimental.AUTOTUNE)
 test_dataset = dataset.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.experimental.AUTOTUNE)
+print(type(train_dataset))
+print(train_dataset.shape)
+exit(0)
 
 class SaveEpochLossCallback(tf.keras.callbacks.Callback):
     def __init__(self, filepath):
@@ -70,7 +92,6 @@ class TransformerBlock(tf.keras.layers.Layer):
         self.ffn = tf.keras.Sequential(
             [Dense(forward_expansion, activation="relu"), Dense(embed_size),]
         )
-
         self.dropout = tf.keras.layers.Dropout(rate)
 
     def call(self, x, training):
@@ -88,37 +109,12 @@ x = Dense(embed_size)(inputs)
 x = TransformerBlock(embed_size, num_heads, forward_expansion)(x)
 x = Dense(output_window_size)(x[:, -1, :])
 
-
-dataset_length = len(data) - input_window_size - output_window_size + 1
-##train_size = int(1 * dataset_length)
-total_steps = train_size // BATCH_SIZE  # Assuming batch size of 47
-
-print(f"###############################################################")
-print(f"Total steps per epoch: {total_steps}")
-print(f"###############################################################")
-
 model_save_path = "model_at_epoch_{epoch}_allrecording_3090.h5"
 model_checkpoint_cb = ModelCheckpoint(model_save_path, save_best_only=False, save_weights_only=False)
 
 model = Model(inputs=inputs, outputs=x)
 model.compile(loss="mse", optimizer="adam")
 
-
-# Using the callback during model training
 save_epoch_loss_cb = SaveEpochLossCallback('epoch_loss.csv')
 history = model.fit(train_dataset, validation_data=test_dataset, epochs=10, callbacks=[save_epoch_loss_cb, model_checkpoint_cb])
 
-predictions = model.predict(test_dataset.unbatch().batch(1))
-model.save("first_model_3090.keras")
-predicted_sound = np.concatenate(predictions)
-
-np.save('predicted_sound.npy', predicted_sound)
-# Normalize and scale to int16 range
-predicted_sound = np.int16(predicted_sound/np.max(np.abs(predicted_sound)) * 32767)
-scipy.io.wavfile.write('predicted_output_3090.wav', rate//2, predicted_sound)
-
-with open('history.csv', 'w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerow(["Epoch", "Training Loss", "Validation Loss"])
-    for epoch, train_loss, val_loss in zip(range(len(history.history['loss'])), history.history['loss'], history.history['val_loss']):
-        writer.writerow([epoch, train_loss, val_loss])
