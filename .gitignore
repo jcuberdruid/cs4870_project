@@ -7,3 +7,4 @@ test_model_update.py
 wavelengths-haha.txt
 oldPython/prediction/
 *.h5
+__pycache__

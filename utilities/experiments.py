@@ -83,5 +83,5 @@ class ExperimentManager:
 
 # Example usage:
 manager = ExperimentManager()
-#manager.new_experiment("Test", "Description of the experiment")
-manager.archive("bbfde84a-364f-4190-b0c3-77b41d1af75f")
+manager.new_experiment("Test", "Description of the experiment")
+#manager.archive("bbfde84a-364f-4190-b0c3-77b41d1af75f")
