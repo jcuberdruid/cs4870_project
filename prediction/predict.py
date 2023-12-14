@@ -14,9 +14,9 @@ import glob
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
 percentage = .05
-BATCH_SIZE = 1024
-input_window_size = 500
-output_window_size = 10
+BATCH_SIZE = 400
+input_window_size = 1000
+output_window_size = 20
 new_path = "../../data/2Khz_wav"
 #new_path = "../../data/wav_files"
 EPOCHS = 25
