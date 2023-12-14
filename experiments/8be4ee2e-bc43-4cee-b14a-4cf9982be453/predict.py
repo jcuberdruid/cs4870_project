@@ -13,14 +13,14 @@ import glob
 
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
-percentage = .05
-BATCH_SIZE = 1024
+percentage = .01
+BATCH_SIZE = 2048
 input_window_size = 500
-output_window_size = 250
+output_window_size = 5
 new_path = "../../data/2Khz_wav"
 #new_path = "../../data/wav_files"
 EPOCHS = 25
-experiment = "4c967c7a-37d1-4e99-9c24-06d3ae56504a"
+experiment = "8be4ee2e-bc43-4cee-b14a-4cf9982be453"
 model_dir = f"../experiments/{experiment}/"
 #epoch = 1
 #MODEL_SAVE_PATH_PATTERN = f"../experiments/{experiment}/model_at_epoch_{epoch}.h5"
@@ -98,7 +98,7 @@ def create_dataset_gen(selected_files, input_window_size=5000, output_window_siz
 			X = data[i:i+input_window_size]
 			Y = data[i+input_window_size:i+input_window_size+output_window_size]
 			yield X.reshape(input_window_size, 1), Y.reshape(output_window_size, 1)
-		#print(f"Processing file {idx+1}/{len(selected_files)}: {file_path}", end='\r')
+		print(f"Processing file {idx+1}/{len(selected_files)}: {file_path}", end='\r')
 	print("\nFinished processing files.")
 	
 dataset = tf.data.Dataset.from_generator(
@@ -146,7 +146,6 @@ embed_size = 256
 num_heads = 4
 forward_expansion = 1
 
-#inputs = Input(shape=(input_window_size, 1))
 inputs = Input(shape=(input_window_size, 1))
 x = Dense(embed_size)(inputs)
 x = TransformerBlock(embed_size, num_heads, forward_expansion)(x)
@@ -171,8 +170,6 @@ else:
 
 model_checkpoint_cb = ModelCheckpoint(MODEL_SAVE_PATH_PATTERN, save_best_only=False, save_weights_only=False)
 save_epoch_loss_cb = SaveEpochLossCallback('epoch_loss.csv')
-
-model.summary()
 
 initial_epoch = last_epoch if last_epoch != -1 else 0
 history = model.fit(train_dataset, validation_data=test_dataset, epochs=EPOCHS, initial_epoch=initial_epoch, callbacks=[save_epoch_loss_cb, model_checkpoint_cb])

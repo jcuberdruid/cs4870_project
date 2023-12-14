@@ -6,25 +6,22 @@ import scipy.io.wavfile
 from keras.layers import Input, Dense, LayerNormalization
 from keras.models import Model
 from keras.callbacks import ModelCheckpoint
-from tensorflow.keras.optimizers import Adam
 import random
 import csv
 import glob
 
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
-percentage = .05
-BATCH_SIZE = 1024
-input_window_size = 500
+percentage = .01
+BATCH_SIZE = 128
+input_window_size = 2000
 output_window_size = 250
 new_path = "../../data/2Khz_wav"
 #new_path = "../../data/wav_files"
 EPOCHS = 25
-experiment = "4c967c7a-37d1-4e99-9c24-06d3ae56504a"
-model_dir = f"../experiments/{experiment}/"
-#epoch = 1
-#MODEL_SAVE_PATH_PATTERN = f"../experiments/{experiment}/model_at_epoch_{epoch}.h5"
-#MODEL_SAVE_PATH_PATTERN = f"../experiments/7bf64a2e-05fe-4dc7-9f48-23efcdbc1011/model_at_epoch_{epoch}.h5"
+experiment = "7bf64a2e-05fe-4dc7-9f48-23efcdbc1011"
+epoch = 1
+MODEL_SAVE_PATH_PATTERN = f"../experiments/{experiment}/model_at_epoch_{epoch}.h5"
 
 def si_snr(y_true, y_pred, epsilon=1e-4):
     """
@@ -71,7 +68,7 @@ def find_last_saved_model(model_dir):
 	max_epoch = -1
 	last_model_path = None
 	for file in os.listdir(model_dir):
-		match = re.search(r"model_at_epoch_(\d+)", file)
+		match = re.search(r"model_at_epoch_(\d+)_", file)
 		if match:
 			epoch = int(match.group(1))
 			if epoch > max_epoch:
@@ -87,7 +84,7 @@ random.shuffle(all_files)
 
 num_files_to_use = int(len(all_files) * percentage)
 selected_files = all_files[:num_files_to_use]  # Selects the first 'num_files_to_use' files
-#print(selected_files)
+print(selected_files)
 
 def create_dataset_gen(selected_files, input_window_size=5000, output_window_size=1200):
 	for idx, file_path in enumerate(selected_files):
@@ -144,35 +141,29 @@ class TransformerBlock(tf.keras.layers.Layer):
 	
 embed_size = 256
 num_heads = 4
-forward_expansion = 1
+forward_expansion = 64
 
-#inputs = Input(shape=(input_window_size, 1))
 inputs = Input(shape=(input_window_size, 1))
 x = Dense(embed_size)(inputs)
 x = TransformerBlock(embed_size, num_heads, forward_expansion)(x)
 x = Dense(output_window_size)(x[:, -1, :])
 
+model_dir = "./"
 last_model_path, last_epoch = find_last_saved_model(model_dir)
-MODEL_SAVE_PATH_PATTERN = f"{model_dir}model_at_epoch_{last_epoch+1}.h5"
-print(MODEL_SAVE_PATH_PATTERN)
-
-opt= Adam(learning_rate=0.001)
 
 if last_model_path and os.path.exists(last_model_path):
 	print(f"Resuming from epoch {last_epoch} using model {last_model_path}")
 	model = tf.keras.models.load_model(last_model_path, custom_objects={"TransformerBlock": TransformerBlock}, compile=False)
-	model.compile(optimizer='adam', loss='mse')
-	#model.compile(optimizer=opt, loss=si_snr)
+	#model.compile(optimizer='adam', loss='mae')
+	model.compile(optimizer='adam', loss=si_snr)
 else:
 	print("Starting from scratch.")
 	model = Model(inputs=inputs, outputs=x)
-	model.compile(loss='mse', optimizer='adam')
-	#model.compile(optimizer=opt, loss=si_snr)
+	#model.compile(loss='mae', optimizer="adam")
+	model.compile(optimizer='adam', loss=si_snr)
 
 model_checkpoint_cb = ModelCheckpoint(MODEL_SAVE_PATH_PATTERN, save_best_only=False, save_weights_only=False)
 save_epoch_loss_cb = SaveEpochLossCallback('epoch_loss.csv')
-
-model.summary()
 
 initial_epoch = last_epoch if last_epoch != -1 else 0
 history = model.fit(train_dataset, validation_data=test_dataset, epochs=EPOCHS, initial_epoch=initial_epoch, callbacks=[save_epoch_loss_cb, model_checkpoint_cb])

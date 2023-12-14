@@ -22,6 +22,7 @@ class ExperimentManager:
 
     def new_experiment(self, name, description):
         uid = self.generateUID()
+        print(uid)
         exp_name_uid = f"{uid}"
         os.makedirs(os.path.join(self.results_dir, ("results_"+exp_name_uid)))
         os.makedirs(os.path.join(self.experiment_dir, exp_name_uid))
